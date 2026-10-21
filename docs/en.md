@@ -1,61 +1,142 @@
-# Demo Devices Template
+# VMware ESXi
 
-This is the user documentation of the integration. Gladys re-hosts this file
-and shows a permanent **Documentation** link to it in the Configuration screen
-(in the user's language, with English as the fallback) — it is when
-configuring that the user needs it most. Keep the short onboarding hints in
-the `section` blocks of the manifest `config_schema`; put the long
-step-by-step (screenshots, troubleshooting…) here.
+VMware ESXi hosts, standalone or managed by a vCenter, in Gladys, through the
+local vSphere API (HTTPS, `/sdk`). Handy for a homelab:
 
-## What you get
+- each **host** can become a Gladys device: **connected** (yes / no),
+  **maintenance mode**, **CPU** and **memory** load (%), **memory used** and
+  **total** (GB), **uptime** (hours), **health** (`green`, `yellow`, `red`,
+  `gray`), **VMs running**, **version**;
+- each **datastore**: **accessible**, **used** (%), **free space** and
+  **capacity** (GB);
+- each **virtual machine**: **running** (yes / no), **power state**
+  (`poweredOn`, `poweredOff`, `suspended`), **VMware Tools running**,
+  **CPU** load (%), **memory consumed** (MB), **uptime**, **health**, and
+  three buttons: **Start**, **Shut down (guest)**, **Restart (guest)**,
+  inactive until you allow them.
 
-Six demo devices show up after installation: a weather station (real data
-from Open-Meteo), a switch, a dimmable light, a smart plug with power
-metering, a motion sensor and a camera.
+Gladys never shuts down, restarts nor puts a host in maintenance mode or
+standby, and never powers a VM off or resets it the hard way.
+
+> **This integration has never been tested with a real ESXi host** nor with
+> a real vCenter. This first version follows the vSphere API as pyVmomi (the
+> official SDK) describes it, and was tested against a fake server only.
+> Tell on the Gladys forum what works and what does not, with the version of
+> ESXi or vCenter.
+
+Unofficial integration, not affiliated with VMware or Broadcom.
+
+## Before you start
+
+1. **Create an account for Gladys** rather than using `root`. On a
+   standalone ESXi (Host Client, `https://<host>/ui`): **Host**, **Manage**,
+   **Security & users**, **Users**, **Add user**; then **Host**,
+   **Actions**, **Permissions**, **Add user** with the role **Read-only**.
+   On a vCenter: a user of `vsphere.local` (or of your directory) with the
+   **Read-only** role on the root of the inventory, propagated.
+2. **Only if you want the VM buttons**: give the account a role holding, in
+   addition, the privileges **Virtual machine, Interaction, Power on**
+   (Start), **Power off** (Shut down) and **Reset** (Restart), on the VMs
+   concerned only if you can.
+3. With a **free ESXi license**, the API is read-only: the readings work,
+   the buttons are refused by the server ("forbidden by the license").
+4. Optional: note the **SHA-256 fingerprint** of the certificate of the
+   server (shown by your browser on its web interface, or by
+   `openssl x509 -noout -fingerprint -sha256 -in /etc/vmware/ssl/rui.crt`
+   on the ESXi shell).
 
 ## Configuration
 
-1. Open the **Configuration** tab of the integration.
-2. Set the **latitude** and **longitude** the demo weather station should
-   observe (they default to Paris), and pick your temperature unit.
-   The **refresh interval** sets how often the weather station and the
-   plug's power are read: every 5 minutes by default, every minute at most.
-3. Save: the devices appear in the **Discovery** tab, ready to be added.
+- **Address of the ESXi host or vCenter**: its IP address or host name. An
+  address pasted from a browser (`https://192.168.1.10/ui/`) is read as its
+  host and port. HTTPS only (the API exists only there).
+- **Port**: empty, 443.
+- **Certificate fingerprint**: ESXi uses a self-signed certificate that no
+  authority vouches for. Empty: Gladys learns it at the first connection,
+  with a request that carries no secret, keeps its SHA-256 fingerprint in its
+  `/data` volume, and sends the password only on a connection whose
+  certificate matches. Filled: only this certificate is accepted, from the
+  very first request. If the server later shows another certificate (a
+  reinstall, a renewed certificate, or another machine at this address),
+  Gladys stops **before sending anything** and says so in the status: if you
+  changed the certificate yourself, save the configuration to accept the new
+  one.
+- **User name** and **Password**: the account above. The password is kept by
+  Gladys in its database, never shown again, sent only to the server. It is
+  taken as you type it (a space at the start or the end counts). The
+  integration never writes it to its logs nor to `/data`, nor the session
+  cookie.
+- **Refresh**: how often the server is read (every minute by default). One
+  request each time (a few more for a vCenter with many objects), and a
+  login only when the session expired.
+- **Allow starting / shutting down / restarting a VM**: off by default (see
+  below).
 
-The **Prefer the local connection** toggle drives the demo plug: it reports
-the channel it actually uses as a badge (local or cloud), with an orange dot
-when it runs degraded (local refused, cloud fallback).
+The **Test the connection** button says what the server answers. Like the
+scan of the Discovery tab, a restart of Gladys or of the integration, and
+the same configuration saved again, it reads the server again only when the
+last attempt is older than the refresh (after a failure: than the retry
+delay); otherwise it gives the last result without a request. Saving the
+configuration with other values reads at once.
 
-## Actions
+## The values
 
-- **Test the weather provider** — performs a live request to Open-Meteo and
-  shows the current temperature and humidity under the button.
-- **Identify a device** — pick one of your devices in the list and it will
-  signal itself (the demo light "blinks" in the logs).
+- **CPU (%)** of a host: the CPU used over the capacity of its cores; of a
+  VM: over the capacity of its virtual CPUs on its host.
+- **Memory used** (GB, billions of bytes) of a host: what ESXi reports in
+  use; **memory consumed** (MB, millions of bytes) of a VM: the host memory
+  it occupies.
+- A host that vCenter cannot reach only reports **connected** 0, its health
+  and version; a VM powered off reports 0 for its CPU, memory and uptime.
+- Gladys has no percent unit for a processor or a disk: the unit is in the
+  name of the feature.
+- At most 32 hosts, 64 datastores and 200 VMs are read; VM templates are
+  left out.
+- No scene trigger of its own: use the device triggers of Gladys on
+  **Running**, **Connected** or **Used (%)** (for example "Used above 90").
 
-## Scenes
+## The VM buttons
 
-The integration adds its own cards to the scene editor (Gladys 5.1 or
-later), under the **Integrations** category:
+Stopping a VM can cut a service: a firewall, a NAS, a DNS server, Gladys
+itself if it runs in one. Therefore:
 
-- **Motion detected** (trigger) — starts the scene when a demo motion sensor
-  sees something move. Optionally pick the sensor and what moved (person,
-  animal); left empty, any detection matches. The following actions can
-  read what moved with `{{triggerEvent.data.target}}`.
-- **Identify a device** (action) — makes the chosen device signal itself.
-  It returns whether the device could signal itself, so the following
-  actions can depend on it.
-
-## Dashboard
-
-Add the **Demo status** widget to a dashboard: it shows the live
-temperature of the weather station and the power of the office plug, the
-connection the plug currently uses (orange when degraded) and the observed
-location. Its **Identify the light** button makes the demo light signal
-itself.
+- each button refuses until its option is on;
+- they are buttons, never switches: a "turn everything off" of a voice
+  assistant or a scene never reaches them;
+- before sending, Gladys reads the VM again and checks it is the same one
+  (its instance UUID) and its state: **Start** does nothing on a running VM;
+  **Shut down** and **Restart** need a running VM with VMware Tools running
+  (they ask the guest system to shut down or restart cleanly: never a hard
+  power off or reset); a value that cannot be read refuses;
+- the option, the connection and the deadline are checked again right before
+  sending; when the server is too slow (3.5 s), nothing is sent and Gladys
+  says so;
+- one action per VM per minute at most (even across a restart of the
+  integration): a scene in a loop cannot hammer a VM;
+- **Start** is confirmed only when the VM is read running again within the
+  answer delay; otherwise, and always for **Shut down** and **Restart**
+  (the guest does it on its own), Gladys answers "sent, without
+  confirmation" and reads that VM again 20 seconds later.
 
 ## Troubleshooting
 
-The integration logs everything it does: check the integration logs from the
-Gladys UI (or `docker logs` on the host) with `LOG_LEVEL=debug` for the full
-detail.
+The connection status of the integration says what is going on:
+
+- **User name or password refused**: Gladys stops and does not try again by
+  itself, even after a restart (ESXi locks an account after a few
+  failures). Check them and save the configuration.
+- **The server accepts the login but refuses the readings**: the account
+  lacks the Read-only role; Gladys retries, spaced out.
+- **HTTPS certificate changed**: see Certificate fingerprint above.
+- **HTTP 429 or a server error (5xx)**: every request is paused (one minute
+  to six hours), and the pause survives a restart. A SOAP fault (HTTP 500
+  with an answer of the API) is not a pause.
+- **No answer, wrong address**: Gladys retries, never faster than the
+  refresh, waiting longer each time (up to 30 minutes).
+
+## Privacy
+
+Gladys keeps only what it shows. The guest host names, IP and MAC addresses,
+annotations and BIOS UUIDs of the VMs are never asked for. The names of the
+hosts, datastores and VMs go to Gladys (they name the devices), never to the
+logs nor to `/data`.

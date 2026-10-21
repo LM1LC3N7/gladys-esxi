@@ -1,177 +1,166 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "name": "Demo Devices Template",
+  "name": "VMware ESXi",
   "description": {
-    "en": "Starter template showing sensors, a switch, a dimmable light and a smart plug.",
-    "fr": "Template de démarrage : capteurs, interrupteur, lampe variable et prise connectée."
+    "en": "VMware ESXi hosts and vCenter: CPU, memory, datastores, virtual machines, VM buttons.",
+    "fr": "Hôtes VMware ESXi et vCenter : CPU, mémoire, datastores, machines virtuelles, boutons."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/gladysassistant/integration-template-js:1.0.0",
+  "version": "0.1.0",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-esxi:0.1.0",
   "gladys_version": ">=5.1.0",
-  "cover_image": "https://raw.githubusercontent.com/GladysAssistant/integration-template-js/master/cover.png",
-  "categories": ["lighting", "security", "environment"],
-  "transports": ["local", "cloud"],
+  "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-esxi/main/cover.png",
+  "categories": ["network", "services"],
+  "transports": ["local"],
   "config_schema": [
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "label": { "en": "How it works", "fr": "Fonctionnement" },
       "description": {
-        "en": "The demo weather station reads real data from the free Open-Meteo API: pick the coordinates to observe. No account, no API key.",
-        "fr": "La station météo de démonstration lit de vraies données via l'API gratuite Open-Meteo : choisissez les coordonnées à observer. Pas de compte, pas de clé d'API."
+        "en": "Gladys reads a VMware ESXi host or a vCenter through its local vSphere API (HTTPS, /sdk), with an account of the server. Each host, datastore and virtual machine can become a device: host connected, maintenance, CPU and memory load, uptime, health, VMs running; datastore usage and free space; VM running, power state, VMware Tools, CPU, memory, uptime. Each VM has Start, Shut down and Restart buttons, off unless you allow them below. Gladys never stops nor restarts a host. Unofficial integration, not affiliated with VMware or Broadcom.",
+        "fr": "Gladys lit un hôte VMware ESXi ou un vCenter par son API vSphere locale (HTTPS, /sdk), avec un compte du serveur. Chaque hôte, datastore et machine virtuelle peut devenir un appareil : hôte connecté, maintenance, charge CPU et mémoire, durée de fonctionnement, santé, VM en marche ; occupation et espace libre des datastores ; VM en marche, état, VMware Tools, CPU, mémoire, durée de fonctionnement. Chaque VM a des boutons Démarrer, Arrêter et Redémarrer, inactifs tant que vous ne les autorisez pas plus bas. Gladys n'arrête ni ne redémarre jamais un hôte. Intégration non officielle, sans lien avec VMware ni Broadcom."
       },
       "links": [
         {
-          "url": "https://open-meteo.com/en/docs",
-          "label": { "en": "Open-Meteo documentation", "fr": "Documentation Open-Meteo" }
+          "url": "https://developer.broadcom.com/xapis/vsphere-web-services-api/latest/",
+          "label": { "en": "vSphere Web Services API", "fr": "API vSphere Web Services" }
         }
       ]
     },
     {
-      "key": "latitude",
-      "type": "number",
-      "label": { "en": "Latitude", "fr": "Latitude" },
-      "description": {
-        "en": "Latitude used for the demo weather sensor.",
-        "fr": "Latitude utilisée par le capteur météo de démonstration."
+      "key": "host",
+      "type": "string",
+      "label": {
+        "en": "Address of the ESXi host or vCenter",
+        "fr": "Adresse de l'hôte ESXi ou du vCenter"
       },
-      "placeholder": { "en": "e.g. 48.8566", "fr": "ex. 48.8566" },
-      "required": true,
-      "default": 48.8566,
-      "min": -90,
-      "max": 90
+      "description": {
+        "en": "The IP address (or host name) of its web interface on your local network. HTTPS only.",
+        "fr": "L'adresse IP (ou le nom d'hôte) de son interface web sur votre réseau local. HTTPS uniquement."
+      },
+      "placeholder": { "en": "e.g. 192.168.1.10", "fr": "ex. 192.168.1.10" },
+      "required": true
     },
     {
-      "key": "longitude",
+      "key": "port",
       "type": "number",
-      "label": { "en": "Longitude", "fr": "Longitude" },
+      "label": { "en": "Port", "fr": "Port" },
       "description": {
-        "en": "Longitude used for the demo weather sensor.",
-        "fr": "Longitude utilisée par le capteur météo de démonstration."
+        "en": "Empty: 443. Change it only if you moved the HTTPS port of the server.",
+        "fr": "Vide : 443. Changez-le seulement si vous avez déplacé le port HTTPS du serveur."
       },
-      "placeholder": { "en": "e.g. 2.3522", "fr": "ex. 2.3522" },
-      "required": true,
-      "default": 2.3522,
-      "min": -180,
-      "max": 180
-    },
-    {
-      "key": "unit",
-      "type": "select",
-      "label": { "en": "Temperature unit", "fr": "Unité de température" },
       "required": false,
-      "default": "celsius",
+      "min": 1,
+      "max": 65535
+    },
+    {
+      "key": "certificate_fingerprint",
+      "type": "string",
+      "label": {
+        "en": "Certificate fingerprint (SHA-256, optional)",
+        "fr": "Empreinte du certificat (SHA-256, facultatif)"
+      },
+      "description": {
+        "en": "ESXi uses a self-signed certificate. Empty: Gladys learns it at the first connection, before sending the password, and then refuses any other one. Filled: only this certificate is accepted (the SHA-256 fingerprint shown by your browser or by the ESXi console).",
+        "fr": "ESXi utilise un certificat auto-signé. Vide : Gladys l'apprend à la première connexion, avant d'envoyer le mot de passe, puis refuse tout autre. Rempli : seul ce certificat est accepté (l'empreinte SHA-256 affichée par votre navigateur ou par la console ESXi)."
+      },
+      "placeholder": {
+        "en": "e.g. AB:CD:…:EF (64 hex digits)",
+        "fr": "ex. AB:CD:…:EF (64 caractères hexa)"
+      },
+      "required": false
+    },
+    {
+      "key": "username",
+      "type": "string",
+      "label": { "en": "User name", "fr": "Nom d'utilisateur" },
+      "description": {
+        "en": "A dedicated account with the Read-only role is advised (root works but can do anything). The VM buttons need the Power on, Power off and Reset privileges in addition (see the documentation).",
+        "fr": "Un compte dédié avec le rôle Lecture seule est conseillé (root fonctionne mais peut tout faire). Les boutons des VM demandent en plus les privilèges Mettre sous tension, Mettre hors tension et Réinitialiser (voir la documentation)."
+      },
+      "placeholder": { "en": "e.g. gladys", "fr": "ex. gladys" },
+      "required": true
+    },
+    {
+      "key": "password",
+      "type": "secret",
+      "label": { "en": "Password", "fr": "Mot de passe" },
+      "description": {
+        "en": "The password of this account. Kept by Gladys in its database, never shown again, sent only to the server, and only once its certificate is checked. If the server refuses it, Gladys stops until you save the configuration (ESXi locks an account after a few failures).",
+        "fr": "Le mot de passe de ce compte. Gardé par Gladys dans sa base, jamais réaffiché, envoyé seulement au serveur, et seulement une fois son certificat vérifié. Si le serveur le refuse, Gladys s'arrête jusqu'à l'enregistrement de la configuration (ESXi bloque un compte après quelques échecs)."
+      },
+      "required": true
+    },
+    {
+      "key": "poll_interval",
+      "type": "select",
+      "label": { "en": "Refresh", "fr": "Rafraîchissement" },
+      "description": {
+        "en": "How often Gladys reads the server (one request each time, two or more for a large vCenter).",
+        "fr": "Fréquence de lecture du serveur (une requête à chaque fois, plusieurs pour un gros vCenter)."
+      },
+      "required": true,
+      "default": "60",
       "options": [
-        { "value": "celsius", "label": { "en": "Celsius", "fr": "Celsius" } },
-        { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
+        { "value": "60", "label": { "en": "Every minute", "fr": "Toutes les minutes" } },
+        { "value": "120", "label": { "en": "Every 2 minutes", "fr": "Toutes les 2 minutes" } },
+        { "value": "300", "label": { "en": "Every 5 minutes", "fr": "Toutes les 5 minutes" } },
+        { "value": "600", "label": { "en": "Every 10 minutes", "fr": "Toutes les 10 minutes" } }
       ]
     },
     {
-      "key": "poll_frequency",
-      "type": "number",
-      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
+      "key": "commands",
+      "type": "section",
+      "label": { "en": "VM buttons", "fr": "Boutons des VM" },
       "description": {
-        "en": "How often sensors are polled, in seconds (one minute minimum).",
-        "fr": "Fréquence d'interrogation des capteurs, en secondes (une minute minimum)."
+        "en": "Stopping a VM can cut a service (a firewall, a NAS, Gladys itself if it runs in one). Each button is off by default. The VM is read again before acting, one action per VM per minute at most, and nothing is ever sent to a host.",
+        "fr": "Arrêter une VM peut couper un service (un pare-feu, un NAS, Gladys lui-même s'il tourne dans l'une d'elles). Chaque bouton est désactivé par défaut. La VM est relue avant d'agir, une action par VM et par minute au plus, et rien n'est jamais envoyé à un hôte."
+      }
+    },
+    {
+      "key": "allow_vm_start",
+      "type": "boolean",
+      "label": { "en": "Allow starting a VM", "fr": "Autoriser le démarrage d'une VM" },
+      "description": {
+        "en": "Off by default. On: the Start button of a VM powers it on (or resumes it if suspended).",
+        "fr": "Désactivé par défaut. Activé : le bouton Démarrer d'une VM la met sous tension (ou la reprend si elle est suspendue)."
       },
       "required": false,
-      "default": 300,
-      "min": 60,
-      "max": 3600
+      "default": false
+    },
+    {
+      "key": "allow_vm_shutdown",
+      "type": "boolean",
+      "label": { "en": "Allow shutting down a VM", "fr": "Autoriser l'arrêt d'une VM" },
+      "description": {
+        "en": "Off by default. On: the Shut down button asks the guest system to shut down cleanly (VMware Tools needed). Never a hard power off.",
+        "fr": "Désactivé par défaut. Activé : le bouton Arrêter demande au système invité de s'arrêter proprement (VMware Tools nécessaire). Jamais de coupure brutale."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "allow_vm_restart",
+      "type": "boolean",
+      "label": { "en": "Allow restarting a VM", "fr": "Autoriser le redémarrage d'une VM" },
+      "description": {
+        "en": "Off by default. On: the Restart button asks the guest system to restart cleanly (VMware Tools needed). Never a hard reset.",
+        "fr": "Désactivé par défaut. Activé : le bouton Redémarrer demande au système invité de redémarrer proprement (VMware Tools nécessaire). Jamais de réinitialisation brutale."
+      },
+      "required": false,
+      "default": false
     }
   ],
   "actions": [
     {
-      "key": "test_weather",
-      "label": { "en": "Test the weather provider", "fr": "Tester le fournisseur météo" },
+      "key": "test_connection",
+      "label": { "en": "Test the connection", "fr": "Tester la connexion" },
+      "description": {
+        "en": "Reads the server, again only when the last attempt is older than the refresh; otherwise it says the last result. Saving the configuration with other values reads at once and tries refused credentials again.",
+        "fr": "Lit le serveur, de nouveau seulement quand la dernière tentative est plus ancienne que le rafraîchissement ; sinon il donne le dernier résultat. Enregistrer la configuration avec d'autres valeurs relit tout de suite et réessaie des identifiants refusés."
+      },
       "timeout_seconds": 30
-    },
-    {
-      "key": "identify",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ]
-    }
-  ],
-  "scene_triggers": [
-    {
-      "key": "motion_detected",
-      "label": { "en": "Motion detected", "fr": "Mouvement détecté" },
-      "description": {
-        "en": "A demo motion sensor saw a person or an animal move.",
-        "fr": "Un détecteur de démonstration a vu bouger une personne ou un animal."
-      },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Sensor", "fr": "Détecteur" }
-        },
-        {
-          "key": "target",
-          "type": "multi_select",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" },
-          "options": [
-            { "value": "person", "label": { "en": "Person", "fr": "Personne" } },
-            { "value": "animal", "label": { "en": "Animal", "fr": "Animal" } }
-          ]
-        }
-      ],
-      "variables": [
-        {
-          "key": "target",
-          "type": "string",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" }
-        }
-      ]
-    }
-  ],
-  "scene_actions": [
-    {
-      "key": "identify_device",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "description": {
-        "en": "Make a device signal itself (the demo light blinks).",
-        "fr": "Fait se signaler un appareil (la lampe de démonstration clignote)."
-      },
-      "timeout_seconds": 15,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ],
-      "outputs": [
-        {
-          "key": "signalled",
-          "type": "boolean",
-          "label": { "en": "Device signalled", "fr": "Appareil signalé" }
-        }
-      ]
-    }
-  ],
-  "widgets": [
-    {
-      "key": "demo_status",
-      "label": { "en": "Demo status", "fr": "État de la démo" },
-      "description": {
-        "en": "Live temperature and plug power, plug connection and observed location.",
-        "fr": "Température et puissance en direct, connexion de la prise, position observée."
-      },
-      "icon": "activity",
-      "action_timeout_seconds": 15
     }
   ]
 }

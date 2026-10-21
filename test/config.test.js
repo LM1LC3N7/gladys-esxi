@@ -1,33 +1,63 @@
+// -----------------------------------------------------------------------------
+// The configuration: the address (pasted from a browser too), the port, the
+// fingerprint, the account, the options (all off by default).
+// -----------------------------------------------------------------------------
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeConfig, DEFAULT_CONFIG } from '../src/config.js';
+import { normalizeConfig, parseFingerprint, parseHost } from '../src/config.js';
 
-test('normalizeConfig returns the defaults when called with no argument', () => {
-  assert.deepEqual(normalizeConfig(), DEFAULT_CONFIG);
+test('the address: IP, name, IPv6, a port, a URL pasted from the browser', () => {
+  assert.deepEqual(parseHost('192.168.1.10'), { host: '192.168.1.10', port: null });
+  assert.deepEqual(parseHost(' ESXi01.LAN. '), { host: 'esxi01.lan', port: null });
+  assert.deepEqual(parseHost('[fe80::1]:8443'), { host: 'fe80::1', port: 8443 });
+  assert.deepEqual(parseHost('https://192.168.1.10/ui/'), { host: '192.168.1.10', port: null });
+  assert.deepEqual(parseHost('https://vcenter.lan:8443/sdk'), { host: 'vcenter.lan', port: 8443 });
+  for (const bad of [
+    'http://192.168.1.10',
+    'https://user:pass@192.168.1.10',
+    'https://192.168.1.10/other',
+    'https://192.168.1.10/?a=1',
+    '300.1.1.1',
+    'host:99999',
+    'a b',
+  ]) {
+    assert.deepEqual(parseHost(bad), { error: 'invalid' }, bad);
+  }
+  assert.deepEqual(parseHost(''), { error: 'missing' });
 });
 
-test('normalizeConfig keeps user values over the defaults', () => {
-  const config = normalizeConfig({ latitude: 45.5, longitude: -73.6, unit: 'fahrenheit' });
-  assert.equal(config.latitude, 45.5);
-  assert.equal(config.longitude, -73.6);
-  assert.equal(config.unit, 'fahrenheit');
+test('the fingerprint: any usual form, or empty', () => {
+  const hex = 'ab'.repeat(32);
+  const pin = 'AB:'.repeat(31) + 'AB';
+  assert.deepEqual(parseFingerprint(hex), { pin });
+  assert.deepEqual(parseFingerprint(pin.toLowerCase()), { pin });
+  assert.deepEqual(parseFingerprint(`SHA256: ${hex.match(/../g).join(' ')}`), { pin });
+  assert.deepEqual(parseFingerprint(''), { pin: null });
+  assert.deepEqual(parseFingerprint('ab:cd'), { error: 'invalid' });
+  assert.deepEqual(parseFingerprint('zz'.repeat(32)), { error: 'invalid' });
 });
 
-test('normalizeConfig coerces numeric strings coming from a form', () => {
-  const config = normalizeConfig({ latitude: '48.8', longitude: '2.3', poll_frequency: '600' });
-  assert.equal(config.latitude, 48.8);
-  assert.equal(config.longitude, 2.3);
-  assert.equal(config.poll_frequency, 600);
-  assert.equal(typeof config.poll_frequency, 'number');
-});
-
-test('normalizeConfig falls back to the default for a missing numeric field', () => {
-  const config = normalizeConfig({ unit: 'celsius' });
-  assert.equal(config.poll_frequency, DEFAULT_CONFIG.poll_frequency);
-});
-
-test('GLADYS_PREFER_LOCAL defaults to true and only an explicit false disables it', () => {
-  assert.equal(normalizeConfig().GLADYS_PREFER_LOCAL, true);
-  assert.equal(normalizeConfig({ GLADYS_PREFER_LOCAL: true }).GLADYS_PREFER_LOCAL, true);
-  assert.equal(normalizeConfig({ GLADYS_PREFER_LOCAL: false }).GLADYS_PREFER_LOCAL, false);
+test('defaults: port 443, every VM action off; booleans strictly true', () => {
+  const config = normalizeConfig({ host: '192.168.1.10', username: 'gladys', password: ' p ' });
+  assert.equal(config.port, 443);
+  assert.equal(config.pollSeconds, 60);
+  assert.equal(config.password, ' p ', 'never trimmed');
+  assert.equal(config.allowStart, false);
+  assert.equal(config.allowShutdown, false);
+  assert.equal(config.allowRestart, false);
+  const on = normalizeConfig({
+    allow_vm_start: 'true',
+    allow_vm_shutdown: 1,
+    allow_vm_restart: true,
+    poll_interval: '30',
+  });
+  assert.equal(on.allowStart, true);
+  assert.equal(on.allowShutdown, false, 'only true or "true"');
+  assert.equal(on.allowRestart, true);
+  assert.equal(on.pollSeconds, 60, 'not a listed interval: the default');
+  assert.equal(normalizeConfig({ password: 'a\nb' }).passwordInvalid, true);
+  assert.equal(normalizeConfig({ username: 'a b' }).usernameInvalid, true);
+  assert.equal(normalizeConfig({ port: 'abc' }).portInvalid, true);
+  assert.equal(normalizeConfig({ certificate_fingerprint: 'xx' }).pinInvalid, true);
 });
