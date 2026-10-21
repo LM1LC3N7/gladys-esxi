@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-21
+
 ### Added
 
 - First version: a VMware ESXi host or a vCenter through its local vSphere
@@ -42,4 +44,5 @@ the notes of the version's GitHub Release.
   a VM is kept before the action is sent.
 - Documentation in English and French. Never tested with a real ESXi host.
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-esxi/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-esxi/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-esxi/releases/tag/v0.1.1
