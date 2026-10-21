@@ -50,7 +50,8 @@ function faultType(fault) {
 export function readAnswer(buffer, status) {
   let root;
   try {
-    root = parseXml(buffer.toString('utf8'));
+    // An answer cut short (the connection dropped) is never taken as complete.
+    root = parseXml(buffer.toString('utf8'), { complete: true });
   } catch (err) {
     if (err instanceof XmlError) {
       throw new VsphereError(
@@ -71,7 +72,8 @@ export function readAnswer(buffer, status) {
   const fault = childOf(body, 'Fault');
   if (fault) {
     const type = faultType(fault);
-    const code = (type && FAULT_CODES[type]) ?? CODES.FAULT;
+    // Own keys only: a type named `constructor` or `toString` is just a fault.
+    const code = type && Object.hasOwn(FAULT_CODES, type) ? FAULT_CODES[type] : CODES.FAULT;
     throw new VsphereError(code, `SOAP fault ${type ?? 'unknown'}`, {
       status,
       fault: type ?? 'unknown',

@@ -122,14 +122,14 @@ export const T = {
       en: 'The server refused the user name or the password. Gladys does not try again by itself (ESXi locks an account after a few failures): check them and save the configuration.',
       fr: 'Le serveur a refusé le nom d’utilisateur ou le mot de passe. Gladys ne réessaie pas seul (ESXi bloque un compte après quelques échecs) : vérifiez-les et enregistrez la configuration.',
     },
-    certificateChanged: {
-      en: 'The HTTPS certificate of the server is not the one Gladys knows (a reinstall, a new certificate, or another machine at this address). The password was not sent. If you changed it yourself, save the configuration to accept the new one.',
-      fr: 'Le certificat HTTPS du serveur n’est pas celui que Gladys connaît (réinstallation, nouveau certificat, ou autre machine à cette adresse). Le mot de passe n’a pas été envoyé. Si vous l’avez changé vous-même, enregistrez la configuration pour accepter le nouveau.',
-    },
-    certificateNotTyped: {
-      en: 'The HTTPS certificate of the server is not the one whose fingerprint you typed. The password was not sent. Check the fingerprint (or empty the field to learn the certificate) and save the configuration.',
-      fr: 'Le certificat HTTPS du serveur n’est pas celui dont vous avez saisi l’empreinte. Le mot de passe n’a pas été envoyé. Vérifiez l’empreinte (ou videz le champ pour apprendre le certificat) et enregistrez la configuration.',
-    },
+    certificateChanged: (fingerprint) => ({
+      en: `The HTTPS certificate of the server is not the one Gladys knows (a reinstall, a renewed certificate, or another machine at this address). The password was not sent, and nothing is sent until you vouch for it, whatever you save. Its SHA-256 fingerprint: ${fingerprint}. Compare it with the one of your server (browser, ESXi console); if it is the same, press "Trust the new certificate" or type it in the fingerprint field.`,
+      fr: `Le certificat HTTPS du serveur n’est pas celui que Gladys connaît (réinstallation, certificat renouvelé, ou autre machine à cette adresse). Le mot de passe n’a pas été envoyé, et rien ne l’est tant que vous ne le validez pas, quoi que vous enregistriez. Son empreinte SHA-256 : ${fingerprint}. Comparez-la avec celle de votre serveur (navigateur, console ESXi) ; si c’est la même, appuyez sur « Faire confiance au nouveau certificat » ou saisissez-la dans le champ de l’empreinte.`,
+    }),
+    certificateNotTyped: (fingerprint) => ({
+      en: `The HTTPS certificate of the server is not the one whose fingerprint you typed. The password was not sent. The server shows: ${fingerprint}. If it is the right one, type it in the fingerprint field (or empty the field and press "Trust the new certificate").`,
+      fr: `Le certificat HTTPS du serveur n’est pas celui dont vous avez saisi l’empreinte. Le mot de passe n’a pas été envoyé. Le serveur présente : ${fingerprint}. Si c’est le bon, saisissez-la dans le champ de l’empreinte (ou videz le champ et appuyez sur « Faire confiance au nouveau certificat »).`,
+    }),
     access: (delay) =>
       join(
         {
@@ -208,6 +208,20 @@ export const T = {
         { en: '—', fr: '—' },
         RETRY(delay),
       ),
+  },
+  trust: {
+    nothing: {
+      en: 'No changed certificate to trust: nothing done.',
+      fr: 'Aucun certificat changé à valider : rien n’a été fait.',
+    },
+    typed: (fingerprint) => ({
+      en: `The fingerprint field holds another fingerprint: type ${fingerprint} there, or empty it, then save and press the button again.`,
+      fr: `Le champ de l’empreinte en contient une autre : saisissez-y ${fingerprint}, ou videz-le, puis enregistrez et appuyez de nouveau.`,
+    }),
+    done: (fingerprint) => ({
+      en: `Certificate ${fingerprint} trusted.`,
+      fr: `Certificat ${fingerprint} validé.`,
+    }),
   },
   test: {
     ok: (status) =>

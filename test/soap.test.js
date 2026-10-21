@@ -7,9 +7,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { sessionCookie } from '../src/vsphere/client.js';
+import { VsphereClient, sessionCookie } from '../src/vsphere/client.js';
 import { CODES } from '../src/vsphere/errors.js';
-import { parseInventory, parseVm, parseVmCheck } from '../src/vsphere/parse.js';
+import { cleanText, parseInventory, parseVm, parseVmCheck } from '../src/vsphere/parse.js';
 import { envelope, moref, readAnswer, readObjects, valueOf } from '../src/vsphere/soap.js';
 import {
   XmlError,
@@ -25,6 +25,75 @@ const answer = (inner) =>
   Buffer.from(
     `<?xml version="1.0"?><soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"><soapenv:Body>${inner}</soapenv:Body></soapenv:Envelope>`,
   );
+
+test('M1: a fault type named after a member of Object.prototype is a plain fault', () => {
+  for (const type of ['constructor', 'toString', 'hasOwnProperty', 'valueOf']) {
+    assert.throws(
+      () => readAnswer(Buffer.from(faultXml(type)), 500),
+      (err) => err.code === CODES.FAULT && typeof err.code === 'string',
+      type,
+    );
+  }
+});
+
+test('M2: text pieces count towards the node cap (a flood of lone "<" is refused)', () => {
+  assert.throws(() => parseXml(`<a>${'<1'.repeat(300_000)}</a>`), XmlError);
+  assert.throws(() => parseXml(`<a>${'x<!---->'.repeat(300_000)}</a>`), XmlError);
+});
+
+test('M3: a SOAP answer cut short is never taken as complete', () => {
+  const full = answer(
+    `<RetrievePropertiesExResponse xmlns="urn:vim25"><returnval><token>t1</token><objects><obj type="VirtualMachine">vm-1</obj><propSet><name>name</name><val xsi:type="xsd:string">web</val></propSet></objects></returnval></RetrievePropertiesExResponse>`,
+  ).toString();
+  assert.equal(readAnswer(Buffer.from(full), 200).name, 'RetrievePropertiesExResponse');
+  for (const cut of [full.indexOf('web') + 1, full.length - 5, full.length - 30]) {
+    assert.throws(
+      () => readAnswer(Buffer.from(full.slice(0, cut)), 200),
+      (err) => err.code === CODES.BAD_ANSWER,
+      `cut at ${cut}`,
+    );
+  }
+});
+
+test('M4: the certificate is learned only from a valid vSphere answer', async () => {
+  const learned = [];
+  const make = (status, body) =>
+    new VsphereClient({
+      host: '192.168.1.10',
+      port: 443,
+      username: 'u',
+      password: 'p',
+      onPin: async (fp) => learned.push(fp),
+      request: async () => ({
+        status,
+        headers: {},
+        body: Buffer.from(body),
+        fingerprint: 'AB:'.repeat(31) + 'AB',
+      }),
+    });
+  for (const [status, body] of [
+    [404, '<html>not here</html>'],
+    [302, ''],
+    [200, '<html>a NAS</html>'],
+    [
+      200,
+      answer(
+        '<RetrieveServiceContentResponse xmlns="urn:vim25"><returnval/></RetrieveServiceContentResponse>',
+      ),
+    ],
+  ]) {
+    const client = make(status, String(body));
+    await assert.rejects(client.serviceContent(Date.now() + 5_000));
+    assert.equal(client.pin, null);
+  }
+  assert.deepEqual(learned, []);
+});
+
+test('M11: no half surrogate, no direction override in a name', () => {
+  assert.equal(decodeEntities('a&#xD800;b'), 'ab');
+  assert.equal(cleanText('abc‮def⁦'), 'abcdef');
+  assert.equal(cleanText(`${'x'.repeat(63)}\u{1F600}`), 'x'.repeat(63));
+});
 
 test('an envelope: the method in urn:vim25, _this first, values escaped', () => {
   const xml = envelope(

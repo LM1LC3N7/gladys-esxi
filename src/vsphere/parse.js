@@ -77,12 +77,16 @@ const TOOLS = new Set(['guestToolsNotRunning', 'guestToolsRunning', 'guestToolsE
 
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\x00-\x1f\x7f-\x9f]/g;
+/** Direction overrides and marks (a name shown backwards), lone surrogates. */
+const INVISIBLE =
+  /[‎‏‪-‮⁦-⁩]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
 
 /** A name for Gladys: no control character, trimmed, cut; null when empty. */
 export function cleanText(value, max = LIMITS.TEXT_LENGTH) {
   if (typeof value !== 'string') return null;
-  const clean = value.replace(CONTROL, ' ').replace(/\s+/g, ' ').trim();
-  return clean ? clean.slice(0, max) : null;
+  const clean = value.replace(CONTROL, ' ').replace(INVISIBLE, '').replace(/\s+/g, ' ').trim();
+  // The cut may split a surrogate pair: its half is dropped.
+  return clean ? clean.slice(0, max).replace(INVISIBLE, '') : null;
 }
 
 /** A number within [min, max], or null (never NaN, never a text). */

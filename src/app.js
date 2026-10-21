@@ -57,7 +57,7 @@ import {
   parseExternalId,
   vmIds,
 } from './devices.js';
-import { T, reasonOf } from './i18n.js';
+import { T, join as joinTexts, reasonOf } from './i18n.js';
 import { Store } from './store.js';
 import { VsphereClient } from './vsphere/client.js';
 import { CODES, isCredentialsRefused } from './vsphere/errors.js';
@@ -188,16 +188,16 @@ export class EsxiApp {
       .digest('hex');
   }
 
-  pauseKey() {
-    return `pausedUntil|${this.serverKey()}`;
+  pauseKey(config = this.config) {
+    return `pausedUntil|${this.serverKey(config)}`;
   }
 
-  certKey() {
-    return `certChanged|${this.serverKey()}`;
+  certKey(config = this.config) {
+    return `certChanged|${this.serverKey(config)}`;
   }
 
-  attemptKey() {
-    return `attempt|${this.serverKey()}`;
+  attemptKey(config = this.config) {
+    return `attempt|${this.serverKey(config)}`;
   }
 
   cooldownKey(uuid) {
@@ -215,14 +215,16 @@ export class EsxiApp {
 
   /**
    * (Re)start with a configuration. Calls are serialized. `force`: the user
-   * saved the configuration: credentials refused earlier are tried again, a
-   * new certificate is accepted, and the server is read at once when the
-   * values changed. Nothing else (a reconnection to Gladys, the test button,
-   * the same values saved again) reads faster than the interval, nor lifts a
-   * pause asked by the server.
+   * saved the configuration: credentials refused earlier are tried again,
+   * and the server is read at once when the values changed. A changed
+   * certificate is NEVER accepted by a save: only by its fingerprint typed in
+   * the configuration, or by the "Trust the new certificate" button
+   * (`trusted`, which also reads at once). Nothing else (a reconnection to
+   * Gladys, the test button, the same values saved again) reads faster than
+   * the interval, nor lifts a pause asked by the server.
    */
-  start(rawConfig, { force = false } = {}) {
-    return this.enqueue(() => this.run(rawConfig, { force }));
+  start(rawConfig, { force = false, trusted = false } = {}) {
+    return this.enqueue(() => this.run(rawConfig, { force, trusted }));
   }
 
   /** Gladys went away: the timers stop; the client and a reading in flight are kept. */
@@ -253,13 +255,16 @@ export class EsxiApp {
     const client = this.client;
     this.client = null;
     if (!client) return;
+    // Only the Logout may still go out: a reading in flight never logs in
+    // again with the old values.
+    client.beginClose();
     client
       .logout()
       .catch(() => {})
       .finally(() => client.close());
   }
 
-  async run(rawConfig, { force = false } = {}) {
+  async run(rawConfig, { force = false, trusted = false } = {}) {
     this.halt();
     const generation = ++this.generation;
     this.rawConfig = rawConfig ?? {};
@@ -302,21 +307,25 @@ export class EsxiApp {
       return this.stopWith(T.status.credentialsRefused);
     }
     if (refused) await this.store.set('refusals', key, null);
-    // Another certificate met: nothing is sent until the configuration is
-    // saved, which accepts the new certificate.
-    if (this.store.get('meta', this.certKey())) {
-      if (!force) {
+    // Another certificate met: nothing is sent, whatever is saved, until the
+    // user vouches for exactly the certificate shown in the status: its
+    // fingerprint typed in the configuration, or the "Trust the new
+    // certificate" button (which pins it and clears this mark). Never a new
+    // trust on first use.
+    const changed = this.store.get('meta', this.certKey());
+    if (changed) {
+      if (config.pin !== changed) {
         this.blocked = true;
         this.logger.warn('The HTTPS certificate of the server changed: nothing sent');
-        return this.stopWith(this.certificateMessage());
+        return this.stopWith(this.certificateMessage(changed));
       }
+      await this.store.set('pins', key, changed);
       await this.store.set('meta', this.certKey(), null);
-      await this.store.set('pins', key, null);
       // The client still holds the old pin (its logout goes nowhere: refused before writing).
       this.dropClient();
-      this.logger.info('A new HTTPS certificate of the server will be accepted');
+      this.logger.info('The new HTTPS certificate of the server was typed in the configuration');
     }
-    if (force && !sameValues) {
+    if (trusted || (force && !sameValues)) {
       // Other values saved: the last attempt was about the old ones.
       this.attempts.delete(key);
       this.lastFailure = null;
@@ -372,11 +381,13 @@ export class EsxiApp {
     // Never faster than the interval after the last attempt (a restart of the
     // container included), unless other values were just saved.
     const attempt = await this.lastAttempt();
-    if (attempt && !(force && !sameValues)) {
+    if (attempt && !(trusted || (force && !sameValues))) {
       const at = Math.min(attempt.at, this.now());
-      const waitFor = attempt.failed ? attempt.delay : this.pollMs();
+      // A success waits for the interval; a failure, or an attempt read back
+      // from /data (its outcome unknown), for its retry delay.
+      const waitFor = attempt.failed === false ? this.pollMs() : attempt.delay;
       const wait = Math.min(at + waitFor - this.now(), INTERVALS.RETRY_MAX_MS);
-      if (attempt.failed) this.retryDelay = attempt.delay;
+      if (attempt.failed !== false) this.retryDelay = attempt.delay;
       if (wait > 0) {
         const fresh = this.freshKnown();
         if (!attempt.failed && fresh) {
@@ -388,7 +399,7 @@ export class EsxiApp {
         const failure = this.lastFailure?.key === this.connectionKey() ? this.lastFailure : null;
         await this.setStatus(
           false,
-          attempt.failed
+          attempt.failed === true
             ? (failure?.message ?? T.status.failedBefore(wait))
             : T.status.waiting(wait),
         );
@@ -400,9 +411,35 @@ export class EsxiApp {
     await this.connect(generation);
   }
 
-  /** Another certificate: learned before (it changed), or not the typed fingerprint. */
-  certificateMessage() {
-    return this.config.pin ? T.status.certificateNotTyped : T.status.certificateChanged;
+  /** Another certificate (its fingerprint shown): learned before, or not the typed one. */
+  certificateMessage(fingerprint, config = this.config) {
+    return config.pin
+      ? T.status.certificateNotTyped(fingerprint)
+      : T.status.certificateChanged(fingerprint);
+  }
+
+  /**
+   * "Trust the new certificate": pins exactly the certificate refused last
+   * (the one the status shows), then reads at once. Never a certificate that
+   * was not shown, never a new trust on first use.
+   */
+  async trustCertificate() {
+    await this.store.load();
+    const seen = this.store.get('meta', this.certKey());
+    if (!seen) return T.trust.nothing;
+    if (this.config.pin && this.config.pin !== seen) return T.trust.typed(seen);
+    await this.store.set('pins', this.serverKey(), seen);
+    await this.store.set('meta', this.certKey(), null);
+    this.logger.info('The new HTTPS certificate of the server was trusted by the user');
+    // The client holds the old pin: replaced.
+    this.dropClient();
+    await this.within(
+      this.start(this.rawConfig, { trusted: true }),
+      TEST_BUDGET_MS,
+      T.errors.testTooLong,
+    );
+    const last = this.lastStatus ? JSON.parse(this.lastStatus)[1] : null;
+    return last ? joinTexts(T.trust.done(seen), last) : T.trust.done(seen);
   }
 
   /** The status of a configuration that cannot be used, or null. */
@@ -429,6 +466,7 @@ export class EsxiApp {
 
   /** Online again from the last reading: Discovery, states, badges, status, the loop. */
   async resume(known, generation, wait) {
+    const epoch = this.epoch;
     this.inventory = known.inventory;
     this.about = known.about;
     this.online = true;
@@ -439,7 +477,8 @@ export class EsxiApp {
     await this.publishTransports();
     if (generation !== this.generation) return;
     await this.setStatus(true, this.okMessage());
-    if (generation !== this.generation) return;
+    // A failure handled meanwhile (it halted) owns the next reading: one chain only.
+    if (!this.current(generation, epoch)) return;
     this.scheduleLoop(wait, generation);
   }
 
@@ -500,19 +539,22 @@ export class EsxiApp {
   /** The first reading, then the loop. Never throws. */
   async connect(generation) {
     if (!this.client || generation !== this.generation) return;
+    // A failure handled meanwhile (a VM action answered 5xx: it halts and
+    // schedules its own retry) owns the next reading: one chain only.
+    const epoch = this.epoch;
     if (this.reading && this.readingClient === this.client) {
       this.follow(this.reading, generation);
       return;
     }
     try {
       await this.refresh({ publish: true });
-      if (generation !== this.generation) return;
+      if (!this.current(generation, epoch)) return;
       const inv = this.inventory;
       this.logger.info(
         `The server answers: ${inv.hosts.length} host(s), ${inv.datastores.length} datastore(s), ${inv.vms.length} VM(s)`,
       );
     } catch (err) {
-      await this.failed(err, generation);
+      if (this.current(generation, epoch)) await this.failed(err, generation);
       return;
     }
     this.scheduleLoop(this.pollMs(), generation);
@@ -520,6 +562,13 @@ export class EsxiApp {
 
   async loop(generation, epoch) {
     if (!this.current(generation, epoch)) return;
+    // An attempt made meanwhile (the scan): the loop waits for its interval.
+    const attempt = this.attempts.get(this.serverKey());
+    const since = attempt ? this.now() - attempt.at : Infinity;
+    if (since >= 0 && since < this.pollMs()) {
+      this.scheduleLoop(this.pollMs() - since, generation);
+      return;
+    }
     if (this.paused()) {
       // A pause met on another path (a command): no reading before its end.
       this.scheduleLoop(this.pausedUntil - this.now(), generation);
@@ -555,9 +604,11 @@ export class EsxiApp {
     const at = Number(saved?.at);
     const delay = Number(saved?.delay);
     if (!Number.isFinite(at) || at <= 0) return null;
+    // Read back from /data: its outcome is unknown (`failed: null`), the
+    // retry delay it was started with applies.
     const attempt = {
       at: Math.min(at, this.now()),
-      failed: saved.failed === true,
+      failed: null,
       delay: clamp(
         Number.isFinite(delay) ? delay : this.minRetry(),
         this.minRetry(),
@@ -569,13 +620,17 @@ export class EsxiApp {
   }
 
   /**
-   * An attempt (started, or its outcome): in memory at once; its outcome in
-   * /data, at most once a minute (a later write is deferred, never dropped).
+   * An attempt. Its START is written to /data (`{ at, delay }`, the retry
+   * delay it runs with: a container restart, even a crash during the
+   * reading, waits for it), at most once a minute (a later write deferred,
+   * never dropped). Its outcome only lives in memory: the start already
+   * carries the longest wait.
    */
-  async noteAttempt(at, failed, delay, { persist = true } = {}) {
-    this.attempts.set(this.serverKey(), { at, failed, delay: failed ? delay : 0 });
+  async noteAttempt(at, failed, delay, { persist = false, config = this.config } = {}) {
+    const key = this.serverKey(config);
+    this.attempts.set(key, { at, failed, delay });
     if (!persist) return;
-    this.dirtyAttempt = this.serverKey();
+    this.dirtyAttempt = { key, value: JSON.stringify({ at, delay }) };
     const due = this.attemptWrittenAt + INTERVALS.ATTEMPT_WRITE_MS - this.now();
     if (due <= 0) {
       await this.flushAttempt();
@@ -592,13 +647,11 @@ export class EsxiApp {
       this.timers.clearTimeout(this.flushHandle);
       this.flushHandle = null;
     }
-    const key = this.dirtyAttempt;
-    if (!key) return;
+    const dirty = this.dirtyAttempt;
+    if (!dirty) return;
     this.dirtyAttempt = null;
-    const attempt = this.attempts.get(key);
-    if (!attempt) return;
     this.attemptWrittenAt = this.now();
-    await this.store.set('meta', `attempt|${key}`, JSON.stringify(attempt));
+    await this.store.set('meta', `attempt|${dirty.key}`, dirty.value);
   }
 
   // --- Failures ----------------------------------------------------------------------
@@ -627,23 +680,28 @@ export class EsxiApp {
   /** A reading failed: final refusal, certificate, a pause, or a retry with a growing delay. */
   async failed(err, generation) {
     if (generation !== this.generation) return;
+    // The configuration of the client that failed, frozen: a configuration
+    // saved meanwhile is never marked with this failure (never the HMAC of
+    // its password as "refused", never its address as "certificate changed").
+    const config = this.config;
     const wasOnline = this.online;
     this.online = false;
     this.halt();
-    // Another failure handled meanwhile (it halted again) owns the next
-    // reading: this one never schedules a second chain.
+    // Another failure or a new start handled meanwhile (it halted again)
+    // owns the next reading: this one writes nothing more and never
+    // schedules a second chain.
     const epoch = this.epoch;
     const superseded = () => generation !== this.generation || epoch !== this.epoch || this.blocked;
     await this.publishTransports();
-    const startedAt = this.attempts.get(this.serverKey())?.at ?? this.now();
-    if (isCredentialsRefused(err) || (err?.code === CODES.CERTIFICATE && err.fingerprint)) {
-      // Saving the same values again later waits for the interval too.
-      await this.noteAttempt(startedAt, true, this.retryDelay);
-    }
+    if (superseded()) return;
+    const startedAt = this.attempts.get(this.serverKey(config))?.at ?? this.now();
     if (isCredentialsRefused(err)) {
+      const refusal = await this.refusalKey(config);
+      if (superseded()) return;
       this.blocked = true;
       this.known = null;
-      await this.store.set('refusals', this.serverKey(), await this.refusalKey(this.config));
+      this.noteAttempt(startedAt, true, this.retryDelay, { config });
+      await this.store.set('refusals', this.serverKey(config), refusal);
       this.logger.warn(
         'The server refused the user name or the password: not retried until the configuration is saved',
       );
@@ -653,15 +711,19 @@ export class EsxiApp {
     if (err?.code === CODES.CERTIFICATE && err.fingerprint) {
       this.blocked = true;
       this.known = null;
-      await this.store.set('meta', this.certKey(), err.fingerprint);
+      this.noteAttempt(startedAt, true, this.retryDelay, { config });
+      // The fingerprint met (not a secret): shown in the status, and the
+      // only one the user can vouch for.
+      await this.store.set('meta', this.certKey(config), err.fingerprint);
       this.logger.warn(
-        'The HTTPS certificate of the server is not the pinned one: nothing sent, stopped until the configuration is saved',
+        'The HTTPS certificate of the server is not the pinned one: nothing sent, stopped until the user trusts it',
       );
-      await this.setStatus(false, this.certificateMessage());
+      await this.setStatus(false, this.certificateMessage(err.fingerprint, config));
       return;
     }
     let delay = this.retryDelay;
     const paused = await this.pauseFor(err);
+    if (superseded()) return;
     if (paused > 0) delay = paused;
     if (err?.status !== 429)
       this.retryDelay = Math.min(this.retryDelay * 2, INTERVALS.RETRY_MAX_MS);
@@ -672,8 +734,8 @@ export class EsxiApp {
       this.logger.warn(`The server fails: ${what}`);
     }
     const message = this.errorMessage(err, delay);
-    this.lastFailure = { key: this.connectionKey(), message };
-    await this.noteAttempt(startedAt, true, delay);
+    this.lastFailure = { key: this.connectionKey(config), message };
+    await this.noteAttempt(startedAt, true, delay, { config });
     if (superseded()) return;
     await this.setStatus(false, message);
     if (superseded()) return;
@@ -736,8 +798,10 @@ export class EsxiApp {
     // configuration) publishes nothing and sets no status.
     const stale = () => client !== this.client;
     const started = this.now();
-    // Known at once in memory (the scan, a reconnection); written with its outcome.
-    await this.noteAttempt(started, false, 0, { persist: false });
+    // Known at once in memory (the scan, a reconnection) and in /data (a
+    // restart, even a crash, during the reading waits for it).
+    await this.noteAttempt(started, null, this.retryDelay, { persist: true });
+    if (stale()) return;
     const result = await client.inventory(started + READ_BUDGET_MS);
     if (stale()) return;
     // A pause asked earlier is over (the reading worked): forget it.
@@ -1044,7 +1108,7 @@ export class EsxiApp {
   }
 
   /** The checks of an action, on the latest configuration: before the read and right before sending. */
-  checkAction(action, uuid, generation, client) {
+  checkAction(action, uuid, generation, client, ownMark = null) {
     if (!this.config[VM_ACTIONS[action]]) throw new Error(T.errors.disabled(action));
     if (
       generation !== this.generation ||
@@ -1058,7 +1122,10 @@ export class EsxiApp {
     if (this.paused()) throw new Error(T.errors.paused(this.pausedUntil - this.now()));
     // An action "in the future" (a clock set back) counts as one now: at most
     // one minute of cooldown, never none.
-    let last = Number(this.store.get('cooldowns', this.cooldownKey(uuid))) || 0;
+    const stored = this.store.get('cooldowns', this.cooldownKey(uuid));
+    // The mark this very action wrote just before sending is not a cooldown.
+    if (ownMark !== null && stored === ownMark) return;
+    let last = Number(stored) || 0;
     if (last > this.now()) last = this.now();
     const ago = this.now() - last;
     if (ago < COMMAND.COOLDOWN_MS) throw new Error(T.errors.cooldown(ago));
@@ -1107,9 +1174,11 @@ export class EsxiApp {
     // An unreadable value is not "another VM": the state is unknown.
     if (!fresh.uuid) throw new Error(T.errors.unknownState('instance UUID not readable'));
     if (fresh.uuid !== uuid || fresh.template === true) throw new Error(T.errors.otherVm);
-    if (fresh.connection !== null && fresh.connection !== 'connected') {
-      throw new Error(T.errors.vmNotConnected);
+    // A connection state that cannot be read refuses (unknown), like any value missing.
+    if (fresh.connection === null) {
+      throw new Error(T.errors.unknownState('connection state not readable'));
     }
+    if (fresh.connection !== 'connected') throw new Error(T.errors.vmNotConnected);
     if (fresh.power === null) throw new Error(T.errors.unknownState('power state not readable'));
 
     let method;
@@ -1131,19 +1200,34 @@ export class EsxiApp {
     this.checkAction(action, uuid, generation, client);
     if (this.now() > sendBy) throw new Error(T.errors.tooSlow);
     this.logger.info(`VM ${action} requested from Gladys`);
+    // The cooldown is written BEFORE the request (a stop of the container
+    // between the request and its answer keeps it), and given back when the
+    // request certainly did not leave.
+    const cooldownKey = this.cooldownKey(uuid);
+    const previousCooldown = this.store.get('cooldowns', cooldownKey);
+    const mark = String(this.now());
+    await this.store.set('cooldowns', cooldownKey, mark);
+    const giveBack = async () => {
+      if (this.store.get('cooldowns', cooldownKey) === mark) {
+        await this.store.set('cooldowns', cooldownKey, previousCooldown);
+      }
+    };
     try {
       await client.vmAction(method, known.moref, {
         sendBy,
         answerBy,
         // The very last check, right before the request is written (after
         // the TCP and TLS handshakes): the option, the connection, a pause,
-        // the cooldown, and the deadline.
+        // the cooldown (other than this action's own mark), and the deadline.
         beforeSend: () => {
-          this.checkAction(action, uuid, generation, client);
+          this.checkAction(action, uuid, generation, client, mark);
           if (this.now() > sendBy) throw new Error(T.errors.tooSlow);
         },
       });
     } catch (err) {
+      if (err?.beforeSend || err?.notSent || err?.noSession || err?.code === CODES.LATE) {
+        await giveBack();
+      }
       if (err?.beforeSend) throw err;
       const reason = reasonOf(err).en;
       this.logger.warn(`VM ${action}: ${err?.name === 'VsphereError' ? err.message : 'error'}`);
@@ -1164,7 +1248,8 @@ export class EsxiApp {
         ].includes(err?.code) ||
         (err?.code === CODES.HTTP && err.status < 500)
       ) {
-        // The server answered "no": nothing was done.
+        // The server answered "no": nothing was done (the cooldown stays: a
+        // scene in a loop does not hammer a refusing server).
         throw new Error(T.errors.refused(action, reason), cause);
       }
       // A 5xx, a silence, a broken answer after the request was written: it
@@ -1198,10 +1283,8 @@ export class EsxiApp {
     }
   }
 
-  /** An action sent: the cooldown, in /data before the ack; one reading of the VM later. */
+  /** An action sent (its cooldown already in /data): one reading of the VM later. */
   async sent(uuid, generation) {
-    // The store never throws (a failed write keeps the value in memory).
-    await this.store.set('cooldowns', this.cooldownKey(uuid), String(this.now()));
     const epoch = this.epoch;
     this.schedule(COMMAND.FOLLOW_UP_MS, () => this.followUp(uuid, generation, epoch));
   }

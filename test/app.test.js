@@ -228,25 +228,82 @@ test('credentials refused: stopped, remembered as an HMAC in /data, tried again 
   assert.deepEqual(storeOf(ctx.dataDir).refusals, {});
 });
 
-test('another certificate: nothing sent (no password), stopped and remembered; saving accepts it', async () => {
+const IMPOSTOR = 'EE:'.repeat(31) + 'EE';
+const THIRD = '33:'.repeat(31) + '33';
+
+/** An impostor's certificate at the address: the loop stops on it. */
+async function impostor() {
   const clock = { now: T0 };
   const ctx = await setup({ clock });
+  ctx.server.fingerprint = IMPOSTOR;
+  ctx.server.dropSessions();
+  clock.now += 60_000;
+  ctx.before = ctx.server.requests.length;
+  await poll(ctx.timers);
+  return ctx;
+}
+
+test('another certificate: nothing sent, stopped, its fingerprint kept in /data and shown', async () => {
+  const ctx = await impostor();
   const { server, timers, gladys, app } = ctx;
-  server.fingerprint = 'BB:'.repeat(31) + 'BB';
-  server.dropSessions();
-  clock.now += 60_000;
-  const before = server.requests.length;
-  await poll(timers);
-  assert.equal(server.requests.length, before, 'nothing written to the impostor');
+  assert.equal(server.requests.length, ctx.before, 'nothing written to the impostor');
   assert.match(gladys.fake.connectionStatus.message.en, /certificate/);
+  assert.ok(gladys.fake.connectionStatus.message.en.includes(IMPOSTOR), 'fingerprint shown (en)');
+  assert.ok(gladys.fake.connectionStatus.message.fr.includes(IMPOSTOR), 'fingerprint shown (fr)');
   assert.deepEqual(timers.delays(), []);
-  assert.equal(storeOf(ctx.dataDir).meta[`certChanged|192.168.1.10:443`], server.fingerprint);
+  assert.equal(storeOf(ctx.dataDir).meta['certChanged|192.168.1.10:443'], IMPOSTOR);
   await reconnect(gladys, app);
-  assert.equal(server.requests.length, before);
+  assert.equal(server.requests.length, ctx.before);
+});
+
+test('B1: saving another option never trusts a changed certificate (no TOFU again, no Login)', async () => {
+  const ctx = await impostor();
+  const { server, timers, gladys, app, clock } = ctx;
+  const logins = server.logins().length;
+  clock.now += 3600_000;
+  await app.start({ ...BASE_CONFIG, allow_vm_start: true }, { force: true });
+  clock.now += 3600_000;
+  await timers.run();
+  await settle();
+  assert.equal(server.logins().length, logins, 'no Login to the impostor');
+  assert.equal(server.requests.length, ctx.before, 'nothing at all');
+  assert.ok(gladys.fake.connectionStatus.message.en.includes(IMPOSTOR));
+  assert.notEqual(storeOf(ctx.dataDir).pins['192.168.1.10:443'], IMPOSTOR, 'never re-learned');
+});
+
+test('B1: the fingerprint typed lifts the stop, and only on that certificate; a third one is refused', async () => {
+  const ctx = await impostor();
+  const { server, gladys, app, clock } = ctx;
   clock.now += 60_000;
-  await app.start({ ...BASE_CONFIG }, { force: true });
+  await app.start({ ...BASE_CONFIG, certificate_fingerprint: IMPOSTOR }, { force: true });
   assert.equal(gladys.fake.connectionStatus.connected, true);
-  assert.equal(storeOf(ctx.dataDir).pins['192.168.1.10:443'], server.fingerprint);
+  const logins = server.logins().slice(-1);
+  assert.equal(logins.length, 1);
+  assert.equal(logins[0].pin, IMPOSTOR);
+  assert.equal(storeOf(ctx.dataDir).meta['certChanged|192.168.1.10:443'], undefined);
+  // A third certificate: refused before anything, the fingerprint typed is shown as not met.
+  server.fingerprint = THIRD;
+  server.dropSessions();
+  const count = server.requests.length;
+  clock.now += 60_000;
+  await poll(ctx.timers);
+  assert.equal(server.requests.length, count);
+  assert.ok(gladys.fake.connectionStatus.message.en.includes(THIRD));
+  assert.match(gladys.fake.connectionStatus.message.en, /whose fingerprint you typed/);
+});
+
+test('B1: "Trust the new certificate" pins exactly the one shown; nothing to trust otherwise', async () => {
+  const fresh = await setup();
+  const nothing = await fresh.gladys.fake.action(ACTIONS.TRUST);
+  assert.match(nothing.data.message.en, /No changed certificate/);
+  const ctx = await impostor();
+  const { server, gladys } = ctx;
+  const ack = await gladys.fake.action(ACTIONS.TRUST);
+  assert.equal(ack.success, true);
+  assert.ok(ack.data.message.en.includes(IMPOSTOR));
+  assert.equal(gladys.fake.connectionStatus.connected, true, 'read at once');
+  assert.equal(server.logins().at(-1).pin, IMPOSTOR);
+  assert.equal(storeOf(ctx.dataDir).pins['192.168.1.10:443'], IMPOSTOR);
 });
 
 test('a typed fingerprint is the only one accepted, from the first request', async () => {
@@ -603,19 +660,205 @@ test('the state budget holds across simultaneous publications', async () => {
   assert.ok(calls >= 1);
 });
 
-test('the attempt is written to /data at most once a minute', async () => {
+test('the start of an attempt is written to /data at most once a minute (a later one deferred)', async () => {
   const clock = { now: T0 };
   const ctx = await setup({ clock });
   const { app, timers } = ctx;
-  const first = JSON.parse(storeOf(ctx.dataDir).meta['attempt|192.168.1.10:443']);
-  assert.equal(first.at, T0);
+  const attemptOf = () => JSON.parse(storeOf(ctx.dataDir).meta['attempt|192.168.1.10:443']);
+  assert.deepEqual(attemptOf(), { at: T0, delay: 60_000 });
   clock.now += 10_000;
-  await app.noteAttempt(clock.now, true, 60_000);
-  assert.equal(JSON.parse(storeOf(ctx.dataDir).meta['attempt|192.168.1.10:443']).at, T0);
+  await app.noteAttempt(clock.now, null, 120_000, { persist: true });
+  assert.equal(attemptOf().at, T0, 'not twice in a minute');
   assert.ok(timers.delays().includes(50_000));
   clock.now += 50_000;
   await timers.run((d) => d === 50_000);
   await settle();
-  const later = JSON.parse(storeOf(ctx.dataDir).meta['attempt|192.168.1.10:443']);
-  assert.equal(later.failed, true);
+  assert.deepEqual(attemptOf(), { at: T0 + 10_000, delay: 120_000 }, 'deferred, never dropped');
+});
+
+test('I3: a restart of the container 2 s after a reading STARTED waits for the interval', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'esxi-app-'));
+  const clock = { now: T0 };
+  const first = await setup({ dataDir, clock });
+  clock.now += 60_000;
+  first.server.gate = new Promise(() => {}); // the reading hangs, the container dies
+  void first.timers.run((d) => d === 60_000);
+  await settle();
+  // The atomic write of /data lands (a real file).
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(
+    storeOf(dataDir).meta['attempt|192.168.1.10:443'],
+    JSON.stringify({ at: T0 + 60_000, delay: 60_000 }),
+  );
+  clock.now += 2_000;
+  running = undefined;
+  const server2 = createFakeVsphere({ clock });
+  const second = await setup({ dataDir, clock, server: server2 });
+  assert.equal(server2.requests.length, 0, 'no request before the interval');
+  assert.deepEqual(second.timers.delays(), [58_000]);
+});
+
+test('I1: a configuration saved while failed() runs is never marked refused; the loop goes on', async () => {
+  const ctx = await setup();
+  const { app, server, timers, clock, gladys, dataDir } = ctx;
+  server.password = 'new-right-password';
+  server.dropSessions();
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const original = gladys.publishTransports.bind(gladys);
+  let gated = true;
+  gladys.publishTransports = async (batch) => {
+    if (gated) {
+      gated = false;
+      await gate;
+    }
+    return original(batch);
+  };
+  clock.now += 60_000;
+  const loop = poll(timers);
+  await settle();
+  const saved = app.start({ ...BASE_CONFIG, password: 'new-right-password' }, { force: true });
+  await settle();
+  release();
+  await loop;
+  await saved;
+  await settle();
+  assert.equal(app.blocked, false);
+  assert.equal(app.online, true);
+  assert.deepEqual(storeOf(dataDir).refusals, {}, 'no fingerprint of the right password');
+  assert.equal(gladys.fake.connectionStatus.connected, true);
+  const before = server.readings().length;
+  clock.now += 60_000;
+  await poll(timers);
+  assert.equal(server.readings().length, before + 1, 'the loop still reads');
+});
+
+test('I2: a VM action failing 5xx during the first reading never makes a second loop chain', async () => {
+  const clock = { now: T0 };
+  const ctx = await setup({ config: ALLOW_ALL, clock });
+  const { app, timers, gladys, server } = ctx;
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const original = gladys.publishChangedStates.bind(gladys);
+  let gated = true;
+  gladys.publishChangedStates = async (states) => {
+    if (gated) {
+      gated = false;
+      await gate;
+    }
+    return original(states);
+  };
+  const started = app.start(
+    { ...BASE_CONFIG, ...ALLOW_ALL, poll_interval: '120' },
+    { force: true },
+  );
+  await settle();
+  server.failuresOn.set('PowerOnVM_Task', [{ status: 503, body: 'busy' }]);
+  const pressed = press(gladys, VM2_UUID, 'start');
+  await settle();
+  release();
+  await pressed;
+  await started;
+  await app.following;
+  await settle();
+  const r0 = server.readings().length;
+  for (let i = 0; i < 15; i += 1) {
+    clock.now += 120_000;
+    await timers.run();
+    await settle();
+  }
+  assert.ok(server.readings().length - r0 <= 15, `${server.readings().length - r0} readings`);
+  assert.ok(timers.delays().length <= 2, JSON.stringify(timers.delays()));
+});
+
+test('M5: a replaced client never logs in again with the old password', async () => {
+  const ctx = await setup();
+  const { app, server, timers, clock } = ctx;
+  let release;
+  server.gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  server.dropSessions();
+  clock.now += 60_000;
+  const reading = poll(timers);
+  await settle();
+  const old = app.client;
+  const logins = server.logins().length;
+  // Other values saved meanwhile (another address: the old reading is stale).
+  server.gate = null;
+  const saved = app.start({ ...BASE_CONFIG, host: '192.168.1.11' }, { force: true });
+  release();
+  await reading;
+  await saved;
+  await settle();
+  assert.equal(old.closing, true);
+  const oldLogins = server
+    .logins()
+    .slice(logins)
+    .filter((r) => r.host === '192.168.1.10');
+  assert.equal(oldLogins.length, 0);
+});
+
+test('M6: a VM connection state that cannot be read refuses the action', async () => {
+  const ctx = await setup({ config: ALLOW_ALL });
+  ctx.server.vms[0].connectionState = null;
+  const ack = await press(ctx.gladys, VM_UUID, 'shutdown');
+  assert.match(ack.error, /connection state not readable/);
+  assert.deepEqual(ctx.server.actions, []);
+});
+
+test('M7: the cooldown is in /data before the request leaves; given back when it did not', async () => {
+  const ctx = await setup({ config: ALLOW_ALL });
+  const { gladys, server, dataDir } = ctx;
+  const key = `192.168.1.10:443|${VM_UUID}`;
+  let atSend;
+  const original = server.request;
+  server.request = async (target, options) => {
+    if (options.body.includes('<ShutdownGuest')) atSend = storeOf(dataDir).cooldowns[key];
+    return original(target, options);
+  };
+  ctx.app.client.request = server.request;
+  await press(gladys, VM_UUID, 'shutdown');
+  assert.ok(atSend, 'written before the request');
+  // Not sent (too slow): the cooldown is given back.
+  const other = await setup({ config: ALLOW_ALL });
+  other.server.connectMs.ShutdownGuest = COMMAND.SEND_BY_MS + 1;
+  await press(other.gladys, VM_UUID, 'shutdown');
+  assert.equal(storeOf(other.dataDir).cooldowns[key], undefined);
+});
+
+test('M8: a login answered without a cookie fails, retried spaced, one login per attempt', async () => {
+  const clock = { now: T0 };
+  const server = createFakeVsphere({ clock });
+  const answer = server.answer;
+  server.answer = (body, headers) => {
+    const result = answer(body, headers);
+    if (body.includes('<Login ')) delete result.headers['set-cookie'];
+    return result;
+  };
+  const ctx = await setup({ server, clock });
+  assert.equal(ctx.gladys.fake.connectionStatus.connected, false);
+  assert.equal(server.logins().length, 1);
+  assert.deepEqual(ctx.timers.delays(), [60_000]);
+  clock.now += 60_000;
+  await ctx.timers.run();
+  assert.equal(server.logins().length, 2);
+});
+
+test('M9: the loop never reads within the interval after an attempt of the scan', async () => {
+  const ctx = await setup();
+  const { app, server, timers, clock, gladys } = ctx;
+  clock.now += 60_000 - 1;
+  app.online = true;
+  // The scan reads just before the loop's timer.
+  app.attempts.set('192.168.1.10:443', { at: T0 - 1, failed: false, delay: 0 });
+  await gladys.fake.scanRequest();
+  const count = server.readings().length;
+  clock.now += 1;
+  await poll(timers);
+  assert.equal(server.readings().length, count, 'no second reading at once');
 });

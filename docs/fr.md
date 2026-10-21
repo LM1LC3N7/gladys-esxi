@@ -65,8 +65,11 @@ Intégration non officielle, sans lien avec VMware ni Broadcom.
   accepté, dès la toute première requête. Si le serveur présente plus tard
   un autre certificat (réinstallation, certificat renouvelé, ou autre
   machine à cette adresse), Gladys s’arrête **avant d’envoyer quoi que ce
-  soit** et le dit dans le statut : si vous avez changé le certificat
-  vous-même, enregistrez la configuration pour accepter le nouveau.
+  soit** et montre l’empreinte SHA-256 de ce certificat dans le statut.
+  Enregistrer la configuration ne l’accepte **pas**. Comparez l’empreinte
+  avec celle de votre serveur ; si c’est la même, appuyez sur **Faire
+  confiance au nouveau certificat** (il épingle exactement le certificat
+  montré, puis lit le serveur), ou saisissez cette empreinte dans ce champ.
 - **Nom d’utilisateur** et **Mot de passe** : le compte ci-dessus. Le mot de
   passe est gardé par Gladys dans sa base, jamais réaffiché, envoyé
   seulement au serveur. Il est pris tel que vous le tapez (une espace au
@@ -138,7 +141,9 @@ Le statut de connexion de l’intégration dit ce qui se passe :
   quelques échecs). Vérifiez-les et enregistrez la configuration.
 - **Le serveur accepte la connexion mais refuse les lectures** : il manque
   au compte le rôle Lecture seule ; Gladys réessaie, en espaçant.
-- **Certificat HTTPS changé** : voir Empreinte du certificat plus haut.
+- **Certificat HTTPS changé** : voir Empreinte du certificat plus haut (le
+  bouton **Faire confiance au nouveau certificat**, jamais un simple
+  enregistrement).
 - **HTTP 429 ou erreur serveur (5xx)** : toutes les requêtes sont
   suspendues (d’une minute à six heures), et la pause survit à un
   redémarrage. Une erreur SOAP (HTTP 500 avec une réponse de l’API) n’est

@@ -75,6 +75,9 @@ test/                             node --test, fake Gladys (SDK) + fake vSphere 
 - **HTTPS**: the certificate is pinned (typed, or learned by a request that
   carries no secret) and checked before any byte is written; the password
   only travels on a pinned connection (`secret: true`). Never turn it off.
+  A changed certificate is never accepted by a save nor re-learned: only by
+  its fingerprint typed, or the "Trust the new certificate" action, which
+  pins exactly the fingerprint shown in the status.
 - **Never faster than the interval**: the last attempt is kept in memory and
   in `/data` (at most one write a minute); a restart, a reconnection, the
   test button, the scan and an unchanged configuration all wait for it.

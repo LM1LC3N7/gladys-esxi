@@ -162,6 +162,15 @@ export class VsphereClient {
     this.closed = true;
   }
 
+  /**
+   * Replaced (other values saved): from now on only the Logout may still go
+   * out. A reading in flight never logs in again with the old password (an
+   * ESXi counts every refused login towards the lock of the account).
+   */
+  beginClose() {
+    this.closing = true;
+  }
+
   /** One SOAP exchange within `deadline` (ms since epoch). Resolves the response element. */
   async send(method, self, params, options) {
     return (await this.exchange(method, self, params, options)).element;
@@ -174,7 +183,9 @@ export class VsphereClient {
     params,
     { deadline, secret = true, beforeSend, cookie = true } = {},
   ) {
-    if (this.closed) throw new VsphereError(CODES.CLOSED, 'Client closed', { notSent: true });
+    if (this.closed || (this.closing && method !== 'Logout')) {
+      throw new VsphereError(CODES.CLOSED, 'Client closed', { notSent: true });
+    }
     const left = Math.min(TIMEOUTS.API, (deadline ?? Infinity) - this.now());
     if (left <= 0) throw new VsphereError(CODES.LATE, 'Too late to send', { notSent: true });
     const headers = { 'user-agent': USER_AGENT, soapaction: SOAP_ACTION };
@@ -188,12 +199,6 @@ export class VsphereClient {
       secret,
       beforeSend,
     });
-    if (!this.pin && response.fingerprint) {
-      // Trust on first use: the certificate met now (by a request without a
-      // secret) is the one from now on.
-      this.pin = response.fingerprint;
-      await this.onPin?.(response.fingerprint);
-    }
     if (response.status >= 300 && response.status < 400) {
       throw new VsphereError(CODES.REDIRECT, `HTTP ${response.status}`, {
         status: response.status,
@@ -213,6 +218,7 @@ export class VsphereClient {
       return {
         element: readAnswer(response.body, response.status),
         setCookie: response.headers?.['set-cookie'] ?? null,
+        fingerprint: response.fingerprint ?? null,
       };
     } catch (err) {
       if (err?.code === CODES.HTTP && err.status === 500) {
@@ -225,7 +231,7 @@ export class VsphereClient {
   /** RetrieveServiceContent, once per client: the morefs and `about`. No secret. */
   async serviceContent(deadline) {
     if (this.content) return this.content;
-    const response = await this.send(
+    const { element: response, fingerprint } = await this.exchange(
       'RetrieveServiceContent',
       moref('ServiceInstance', 'ServiceInstance'),
       '',
@@ -249,6 +255,13 @@ export class VsphereClient {
       !parsed.about.apiType
     ) {
       throw new VsphereError(CODES.BAD_ANSWER, 'Not a vSphere service content');
+    }
+    if (!this.pin && fingerprint) {
+      // Trust on first use, only once the answer IS vSphere (a request that
+      // carried no secret): never the certificate of another service met at
+      // a wrong address or port.
+      this.pin = fingerprint;
+      await this.onPin?.(fingerprint);
     }
     this.content = parsed;
     return parsed;
@@ -292,6 +305,9 @@ export class VsphereClient {
     });
     if (!returnval(element)) throw new VsphereError(CODES.BAD_ANSWER, 'Not a login answer');
     const cookie = sessionCookie(setCookie);
+    // A login answered without the cookie: a failure (spaced retry by the
+    // app, never a login per request); the session it opened on the server
+    // cannot be logged out and expires on its own (TODO.md).
     if (!cookie) throw new VsphereError(CODES.BAD_ANSWER, 'No session cookie');
     this.cookie = cookie;
   }

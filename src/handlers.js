@@ -17,9 +17,12 @@ export function registerHandlers(gladys, app, logger) {
 
   // --- Configuration screen button --------------------------------------------------
   gladys.onAction(ACTIONS.TEST, () => app.testConnection());
+  // Pins exactly the changed certificate the status shows (never by a save).
+  gladys.onAction(ACTIONS.TRUST, () => app.trustCertificate());
 
   // --- Configuration saved by the user: refused credentials are tried again,
-  // a new certificate is accepted, other values are read at once.
+  // other values are read at once. A changed certificate stays refused
+  // unless its fingerprint is typed.
   gladys.onConfigUpdated((config) => {
     logger?.info('Configuration updated: restarting');
     return app.start(config, { force: true });

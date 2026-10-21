@@ -58,9 +58,12 @@ Unofficial integration, not affiliated with VMware or Broadcom.
   certificate matches. Filled: only this certificate is accepted, from the
   very first request. If the server later shows another certificate (a
   reinstall, a renewed certificate, or another machine at this address),
-  Gladys stops **before sending anything** and says so in the status: if you
-  changed the certificate yourself, save the configuration to accept the new
-  one.
+  Gladys stops **before sending anything** and shows the SHA-256
+  fingerprint of that certificate in the status. Saving the configuration
+  does **not** accept it. Compare the fingerprint with the one of your
+  server; if it is the same, press **Trust the new certificate** (it pins
+  exactly the certificate shown, then reads the server), or type that
+  fingerprint in this field.
 - **User name** and **Password**: the account above. The password is kept by
   Gladys in its database, never shown again, sent only to the server. It is
   taken as you type it (a space at the start or the end counts). The
@@ -127,7 +130,8 @@ The connection status of the integration says what is going on:
   failures). Check them and save the configuration.
 - **The server accepts the login but refuses the readings**: the account
   lacks the Read-only role; Gladys retries, spaced out.
-- **HTTPS certificate changed**: see Certificate fingerprint above.
+- **HTTPS certificate changed**: see Certificate fingerprint above (the
+  **Trust the new certificate** button, never a plain save).
 - **HTTP 429 or a server error (5xx)**: every request is paused (one minute
   to six hours), and the pause survives a restart. A SOAP fault (HTTP 500
   with an answer of the API) is not a pause.

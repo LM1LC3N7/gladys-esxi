@@ -31,7 +31,10 @@ const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
 
 function codePoint(n) {
   try {
-    return Number.isInteger(n) && n > 0 ? String.fromCodePoint(n) : '';
+    // Never a half of a surrogate pair.
+    return Number.isInteger(n) && n > 0 && (n < 0xd800 || n > 0xdfff)
+      ? String.fromCodePoint(n)
+      : '';
   } catch {
     return '';
   }
@@ -134,17 +137,29 @@ function readStartTag(text, lt) {
   return undefined;
 }
 
-/** Parse a document into its root element; throws an XmlError without one. */
-export function parseXml(input, { maxLength = MAX_LENGTH } = {}) {
+/**
+ * Parse a document into its root element; throws an XmlError without one.
+ * Elements AND text pieces count towards MAX_NODES (a flood of lone `<` or
+ * of comments splitting a text stays bounded in memory). `complete: true` (the SOAP answers) refuses a
+ * document cut short: a tag, a comment or a CDATA left open, or the root
+ * element never closed.
+ */
+export function parseXml(input, { maxLength = MAX_LENGTH, complete = false } = {}) {
   const text = String(input ?? '');
   if (text.length > maxLength) throw new XmlError('document too large');
   const doc = { name: '#document', attrs: Object.create(null), children: [] };
   const stack = [doc];
   let nodes = 0;
   let pos = 0;
+  let cut = false;
+  const count = () => {
+    nodes += 1;
+    if (nodes > MAX_NODES) throw new XmlError('too many nodes');
+  };
   const addText = (value) => {
     const parent = stack[stack.length - 1];
     if (parent === doc || value === '') return; // text outside the root is not content
+    count();
     parent.children.push(value);
   };
 
@@ -157,9 +172,11 @@ export function parseXml(input, { maxLength = MAX_LENGTH } = {}) {
     if (lt > pos) addText(decodeEntities(text.slice(pos, lt)));
     if (text.startsWith('<!--', lt)) {
       const end = text.indexOf('-->', lt + 4);
+      if (end === -1) cut = true;
       pos = end === -1 ? text.length : end + 3;
     } else if (text.startsWith('<![CDATA[', lt)) {
       const end = text.indexOf(']]>', lt + 9);
+      if (end === -1) cut = true;
       addText(text.slice(lt + 9, end === -1 ? text.length : end));
       pos = end === -1 ? text.length : end + 3;
     } else if (text.startsWith('<!', lt)) {
@@ -167,9 +184,11 @@ export function parseXml(input, { maxLength = MAX_LENGTH } = {}) {
       throw new XmlError('DOCTYPE and entity declarations are refused');
     } else if (text.startsWith('<?', lt)) {
       const end = text.indexOf('?>', lt + 2);
+      if (end === -1) cut = true;
       pos = end === -1 ? text.length : end + 2;
     } else if (text[lt + 1] === '/') {
       const end = text.indexOf('>', lt + 2);
+      if (end === -1) cut = true;
       const name = localName(text.slice(lt + 2, end === -1 ? text.length : end).trim());
       pos = end === -1 ? text.length : end + 1;
       // Only the open elements are searched: at most MAX_DEPTH steps.
@@ -184,10 +203,12 @@ export function parseXml(input, { maxLength = MAX_LENGTH } = {}) {
       pos = lt + 1;
     } else {
       const tag = readStartTag(text, lt);
-      if (!tag) break; // a tag cut by the end of the answer
+      if (!tag) {
+        cut = true; // a tag cut by the end of the answer
+        break;
+      }
       pos = tag.end;
-      nodes += 1;
-      if (nodes > MAX_NODES) throw new XmlError('too many elements');
+      count();
       const element = { name: localName(tag.name), attrs: tag.attrs, children: [] };
       stack[stack.length - 1].children.push(element);
       if (!tag.selfClosing) {
@@ -198,6 +219,7 @@ export function parseXml(input, { maxLength = MAX_LENGTH } = {}) {
   }
   const root = doc.children.find((c) => typeof c === 'object');
   if (!root) throw new XmlError('no XML element found');
+  if (complete && (cut || stack.length > 1)) throw new XmlError('the document is cut short');
   return root;
 }
 

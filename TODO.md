@@ -31,6 +31,14 @@ up to date at the end of every milestone.
       on this PC: no e2e test in a container. The store validator was not
       run by the development agent (it runs in the real terminal only).
 
+- [x] **Review corrections 1** (2026-10-21): a changed certificate is
+      accepted only by its fingerprint typed or by the new "Trust the new
+      certificate" button, its fingerprint shown in the status (B1);
+      `failed()` frozen on the failing configuration, superseded checked
+      after each await (I1); one loop chain (I2); the start of an attempt
+      written to `/data` (I3); M1 to M9 and M11 corrected, M8 and M10 noted
+      below. A test each.
+
 ## Decisions
 
 - **Version 0.1.0** set by hand in `package.json`, `package-lock.json`, the
@@ -57,12 +65,19 @@ up to date at the end of every milestone.
   second VM with the same instance UUID (a file copy) too.
 - **HTTPS only, pinned**: ESXi ships a self-signed certificate. The SHA-256
   fingerprint is typed by the user (optional field) or learned by the first
-  RetrieveServiceContent, which carries no secret; Login and every request
-  with the session cookie are `secret: true`: the transport refuses them
-  unsent while no pin is known, and checks the pin right after the TLS
-  handshake, before any byte is written. Another certificate: stop,
-  persisted (the fingerprint met, not a secret), lifted by saving the
-  configuration, which drops the client and accepts the new one.
+  RetrieveServiceContent, which carries no secret, and only once that answer
+  is a valid vSphere service content (never the certificate of another
+  service met at a wrong address or port; review 1, M4); Login and every
+  request with the session cookie are `secret: true`: the transport refuses
+  them unsent while no pin is known, and checks the pin right after the TLS
+  handshake, before any byte is written. Another certificate (review 1, B1):
+  stop, persisted with the fingerprint met (`certChanged|host:port`, not a
+  secret), shown in the status in fr/en; never a new trust on first use.
+  Lifted ONLY by vouching for exactly that certificate: its fingerprint typed
+  in `certificate_fingerprint`, or the "Trust the new certificate" button
+  (`trust_certificate`, like gladys-alfen's `trustCertificate`: pins exactly
+  the one shown, then reads at once). Saving any other option keeps the
+  stop. A third certificate is refused like the second.
 - **Credentials refused** = fault `InvalidLogin` at Login: final, remembered
   as a salted HMAC of address, user name and password (only of a refused
   password), erased at the first reading that works; lifted only by saving
@@ -77,14 +92,30 @@ up to date at the end of every milestone.
   (1 min to 6 h, Retry-After honoured, kept in `/data`). The fault text is
   never kept.
 - **Never faster than the interval** (lot 11 lesson): the last attempt
-  `{ at, failed, delay }` per `host:port` is kept in memory at its start and
-  written to `/data` with its outcome, at most once a minute (a later write
-  deferred, never dropped; flushed at shutdown). A container restart, a
-  reconnection to Gladys, the test button, the scan and the same values
-  saved again wait for `at + interval` (or `+ retry delay` after a failure);
-  only other values saved read at once. A reconnection during a reading
-  follows that reading (same client) instead of starting another. A reading
-  of a replaced client (other values) publishes nothing and sets no status.
+  `{ at, failed, delay }` per `host:port` is kept in memory; its START is
+  written to `/data` as `{ at, delay }` (the retry delay it runs with), at
+  most once a minute (a later write deferred, never dropped; flushed at
+  shutdown), so a restart or a crash DURING a reading waits too (review 1,
+  I3). Read back from `/data`, the outcome is unknown: the retry delay
+  applies (≥ the interval). A container restart, a reconnection to Gladys,
+  the test button, the scan, the loop after a scan (review 1, M9) and the
+  same values saved again wait for `at + interval` (or `+ retry delay`);
+  only other values saved and the trust button read at once. A
+  reconnection during a reading follows that reading (same client) instead
+  of starting another. A reading of a replaced client (other values)
+  publishes nothing and sets no status; a replaced client may only send its
+  Logout (never a new Login with the old password; review 1, M5).
+- **One chain of readings** (review 1, I1, I2): `failed()` freezes the
+  configuration of the client that failed and checks, after each await and
+  before any write, that no new start nor other failure took over; a
+  configuration saved meanwhile is never marked refused nor "certificate
+  changed". `connect()` and `resume()` capture the epoch and never schedule
+  the loop once a failure (a VM action answered 5xx) halted it.
+- **Answers**: a SOAP answer cut short (an element, a tag, a comment left
+  open) is BAD_ANSWER, never read as complete (M3); text pieces count
+  towards the 200,000 nodes (M2); a fault type is looked up as an own key
+  only (M1); `&#xD800;`, direction overrides and a surrogate split by the
+  64-character cut are dropped from names (M11).
 - **External ids**: `host:<moref>` (`ha-host` on a standalone ESXi,
   `host-12` on vCenter), `datastore:<moref>` (the VMFS UUID on ESXi,
   `datastore-15` on vCenter), `vm:<instance uuid>` (stable across a rename,
@@ -93,8 +124,9 @@ up to date at the end of every milestone.
 - **Identity**: every request is checked against the pinned certificate
   (another machine at the address after a DHCP change stops before
   anything is sent). Before an action the VM is read again at its moref:
-  its instance UUID must be the one of the device; an unreadable UUID or
-  power state refuses as "unknown state", never as "another VM".
+  its instance UUID must be the one of the device; an unreadable UUID,
+  connection state (review 1, M6) or power state refuses as "unknown
+  state", never as "another VM".
 - **Features and units** (core `DEVICE_FEATURE_UNITS_BY_CATEGORY`):
   connected, maintenance, accessible, running, VMware Tools
   `unknown`/`binary` (never a switch); CPU, memory, datastore usage
@@ -129,8 +161,11 @@ up to date at the end of every milestone.
   InvalidPowerState, ToolsUnavailable...) is "refused" and never stops the
   readings; a 5xx or a silence after the request was written is "sent,
   without confirmation" and follows the usual pause. One action at a time,
-  one per VM per minute (kept in `/data` before the ack, a time in the
-  future counted as now). The ack never waits for a publication to Gladys.
+  one per VM per minute: the cooldown is written to `/data` BEFORE the
+  request (a stop between the request and its answer keeps it; review 1,
+  M7), given back when the request certainly did not leave (beforeSend,
+  too late, no session), kept after a refusal of the server; a time in the
+  future counts as now. The ack never waits for a publication to Gladys.
 - **No scene trigger** in v1: the device triggers of Gladys on Running,
   Connected or Used (%) cover the needs (VM stopped, host lost, datastore
   almost full).
@@ -150,6 +185,14 @@ up to date at the end of every milestone.
   version, the fault types of a wrong password and of a read-only account,
   the session cookie, the property paths, `RestrictedVersion` on a free
   license, the time a `PowerOnVM_Task` takes to show `poweredOn`.
+- A Login answered 200 without a `vmware_soap_session` cookie (review 1,
+  M8): a failure with a spaced retry (one login per attempt, never a loop),
+  but the session it opened on the server cannot be logged out and expires
+  on its own; check on a real server whether it can happen.
+- Datastores whose moref does not fit the external id pattern (review 1,
+  M10: a vSAN moref such as `vsan:...` holds a colon) are left out (counted
+  in the debug log); check the morefs of vSAN and vVols datastores on a real
+  vCenter and map them to a stable id if needed.
 - Datastore and host sensors (temperatures through the hardware status),
   network rates (PerformanceManager): more calls, to weigh.
 - Snapshots count and age per VM.

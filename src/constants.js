@@ -6,6 +6,7 @@
 
 export const ACTIONS = Object.freeze({
   TEST: 'test_connection',
+  TRUST: 'trust_certificate',
 });
 
 /**

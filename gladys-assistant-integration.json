@@ -62,8 +62,8 @@
         "fr": "Empreinte du certificat (SHA-256, facultatif)"
       },
       "description": {
-        "en": "ESXi uses a self-signed certificate. Empty: Gladys learns it at the first connection, before sending the password, and then refuses any other one. Filled: only this certificate is accepted (the SHA-256 fingerprint shown by your browser or by the ESXi console).",
-        "fr": "ESXi utilise un certificat auto-signé. Vide : Gladys l'apprend à la première connexion, avant d'envoyer le mot de passe, puis refuse tout autre. Rempli : seul ce certificat est accepté (l'empreinte SHA-256 affichée par votre navigateur ou par la console ESXi)."
+        "en": "ESXi uses a self-signed certificate. Empty: Gladys learns it at the first connection, before sending the password, and then refuses any other one (shown in the status, accepted only by the Trust the new certificate button or by typing its fingerprint here). Filled: only this certificate is accepted (the SHA-256 fingerprint shown by your browser or by the ESXi console).",
+        "fr": "ESXi utilise un certificat auto-signé. Vide : Gladys l'apprend à la première connexion, avant d'envoyer le mot de passe, puis refuse tout autre (montré dans le statut, accepté seulement par le bouton Faire confiance au nouveau certificat ou en saisissant son empreinte ici). Rempli : seul ce certificat est accepté (l'empreinte SHA-256 affichée par votre navigateur ou par la console ESXi)."
       },
       "placeholder": {
         "en": "e.g. AB:CD:…:EF (64 hex digits)",
@@ -159,6 +159,15 @@
       "description": {
         "en": "Reads the server, again only when the last attempt is older than the refresh; otherwise it says the last result. Saving the configuration with other values reads at once and tries refused credentials again.",
         "fr": "Lit le serveur, de nouveau seulement quand la dernière tentative est plus ancienne que le rafraîchissement ; sinon il donne le dernier résultat. Enregistrer la configuration avec d'autres valeurs relit tout de suite et réessaie des identifiants refusés."
+      },
+      "timeout_seconds": 30
+    },
+    {
+      "key": "trust_certificate",
+      "label": { "en": "Trust the new certificate", "fr": "Faire confiance au nouveau certificat" },
+      "description": {
+        "en": "Only after the status said the certificate of the server changed (a reinstall, a renewed certificate): compare the fingerprint shown with the one of your server, then this pins exactly that certificate and reads the server. Saving the configuration never does it.",
+        "fr": "Seulement après que le statut a signalé un changement du certificat du serveur (réinstallation, certificat renouvelé) : comparez l'empreinte montrée avec celle de votre serveur, puis ce bouton épingle exactement ce certificat et lit le serveur. Enregistrer la configuration ne le fait jamais."
       },
       "timeout_seconds": 30
     }
