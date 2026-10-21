@@ -660,6 +660,54 @@ test('the state budget holds across simultaneous publications', async () => {
   assert.ok(calls >= 1);
 });
 
+test('review 2 m1: a configuration saved during the refusal write keeps its good status', async () => {
+  const ctx = await setup();
+  const { app, server, timers, clock, gladys } = ctx;
+  server.password = 'new-right-password';
+  server.dropSessions();
+  const set = app.store.set.bind(app.store);
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let gated = true;
+  app.store.set = async (section, key, value) => {
+    if (section === 'refusals' && value && gated) {
+      gated = false;
+      const written = set(section, key, value);
+      await gate;
+      return written;
+    }
+    return set(section, key, value);
+  };
+  clock.now += 60_000;
+  const loop = poll(timers);
+  for (let i = 0; i < 50 && gated; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(gated, false, 'failed() waits in its refusal write');
+  await app.start({ ...BASE_CONFIG, password: 'new-right-password' }, { force: true });
+  await settle();
+  assert.equal(gladys.fake.connectionStatus.connected, true);
+  release();
+  await loop;
+  await settle();
+  assert.equal(gladys.fake.connectionStatus.connected, true, 'never "refused" afterwards');
+  assert.doesNotMatch(gladys.fake.connectionStatus.message.en, /refused/);
+  assert.equal(app.blocked, false);
+});
+
+test('review 2 m2: "Trust the new certificate" starts with the configuration saved before it', async () => {
+  const ctx = await impostor();
+  const { app, gladys } = ctx;
+  const saved = app.start({ ...BASE_CONFIG, poll_interval: '120' }, { force: true });
+  const ack = await gladys.fake.action(ACTIONS.TRUST);
+  await saved;
+  assert.equal(ack.success, true);
+  assert.equal(app.config.pollSeconds, 120);
+  assert.equal(gladys.fake.connectionStatus.connected, true);
+});
+
 test('the start of an attempt is written to /data at most once a minute (a later one deferred)', async () => {
   const clock = { now: T0 };
   const ctx = await setup({ clock });

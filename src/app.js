@@ -434,7 +434,9 @@ export class EsxiApp {
     // The client holds the old pin: replaced.
     this.dropClient();
     await this.within(
-      this.start(this.rawConfig, { trusted: true }),
+      // The configuration read when the task runs, after any save still
+      // queued: never an older one.
+      this.enqueue(() => this.run(this.rawConfig, { trusted: true })),
       TEST_BUDGET_MS,
       T.errors.testTooLong,
     );
@@ -691,7 +693,10 @@ export class EsxiApp {
     // owns the next reading: this one writes nothing more and never
     // schedules a second chain.
     const epoch = this.epoch;
-    const superseded = () => generation !== this.generation || epoch !== this.epoch || this.blocked;
+    // A new start or another failure took over (the block this call sets
+    // itself does not count).
+    const replaced = () => generation !== this.generation || epoch !== this.epoch;
+    const superseded = () => replaced() || this.blocked;
     await this.publishTransports();
     if (superseded()) return;
     const startedAt = this.attempts.get(this.serverKey(config))?.at ?? this.now();
@@ -705,6 +710,8 @@ export class EsxiApp {
       this.logger.warn(
         'The server refused the user name or the password: not retried until the configuration is saved',
       );
+      // A configuration saved during the write owns the status now.
+      if (replaced()) return;
       await this.setStatus(false, T.status.credentialsRefused);
       return;
     }
@@ -718,6 +725,7 @@ export class EsxiApp {
       this.logger.warn(
         'The HTTPS certificate of the server is not the pinned one: nothing sent, stopped until the user trusts it',
       );
+      if (replaced()) return;
       await this.setStatus(false, this.certificateMessage(err.fingerprint, config));
       return;
     }
