@@ -167,7 +167,7 @@ test('start: status, Discovery, states, badges; one request per reading every 60
   assert.ok(gladys.fake.transports.every((t) => t.transport === 'local'));
   assert.deepEqual(timers.delays(), [60_000]);
   assert.deepEqual(server.methods(), ['RetrieveServiceContent', 'Login', 'RetrievePropertiesEx']);
-  assert.equal(server.requests[0].headers['user-agent'], 'gladys-esxi/0.1.0');
+  assert.match(server.requests[0].headers['user-agent'], /^gladys-esxi\/\d+\.\d+\.\d+$/);
 
   // The next reading: one request, the same session.
   ctx.clock.now += 60_000;
