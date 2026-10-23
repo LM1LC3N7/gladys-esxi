@@ -1,6 +1,6 @@
 {
   "name": "gladys-esxi",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Gladys Assistant external integration for VMware ESXi hosts and vCenter: CPU, memory, datastores, state and resources of the virtual machines through the local vSphere API, and Start / Shut down / Restart buttons for the VMs, off by default. Unofficial, not affiliated with VMware or Broadcom.",
   "type": "module",
