@@ -197,3 +197,7 @@ up to date at the end of every milestone.
   network rates (PerformanceManager): more calls, to weigh.
 - Snapshots count and age per VM.
 - A dashboard widget (hosts and VMs at a glance).
+
+## Next patch
+
+- Migration review minors: see `_lots/migration-reviews/w14-gladys-esxi-r1.md`.
