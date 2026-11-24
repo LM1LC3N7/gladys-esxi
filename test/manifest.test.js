@@ -10,6 +10,7 @@ import { createFakeGladys } from '@gladysassistant/integration-sdk/testing';
 import { DEFAULTS } from '../src/config.js';
 import { ACTIONS, FEATURES, POLL_INTERVALS, VM_ACTIONS } from '../src/constants.js';
 import { buildDatastoreDevice, buildHostDevice, buildVmDevice } from '../src/devices.js';
+import { assertCoreDevice } from './helpers/coreFeature.js';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const manifest = JSON.parse(read('gladys-assistant-integration.json'));
@@ -195,4 +196,19 @@ test('features: readings read only, the VM actions buttons, no switch, no host a
   assert.equal(host.external_id, 'ext:esxi:host:ha-host', 'the external id shape is forever');
   assert.equal(datastore.external_id, 'ext:esxi:datastore:datastore-15');
   assert.equal(vm.external_id, 'ext:esxi:vm:5012a3b4-c5d6-47e8-9f01-23456789abcd');
+});
+
+test('every feature has a numeric min and max and the other core fields; none polled', () => {
+  const gladys = createFakeGladys({ selector: 'esxi' });
+  const devices = [
+    buildHostDevice(gladys, { id: 'ha-host', name: 'esxi01', vendor: 'HP', model: 'ML110' }),
+    buildDatastoreDevice(gladys, { id: '5f1a2b3c-4d5e6f70-1a2b-001122334455', type: 'VMFS' }),
+    buildVmDevice(gladys, { uuid: '50312ea9-8d79-6b3c-1234-56789abcdef0', name: 'nas' }),
+  ];
+  let features = 0;
+  for (const device of devices) {
+    features += assertCoreDevice(device, device.external_id);
+    assert.equal(device.should_poll, false, `${device.external_id}: should_poll`);
+  }
+  assert.equal(features, 10 + 4 + 10);
 });

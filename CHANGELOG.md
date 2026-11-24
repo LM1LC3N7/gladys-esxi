@@ -10,6 +10,10 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+### Changed
+
+- Integration SDK 0.16.1 (no change for the devices).
+
 ### Fixed
 
 - Test helper: certificate serial numbers are always valid DER (a test failed about once in 100 runs).
